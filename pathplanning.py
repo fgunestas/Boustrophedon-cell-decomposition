@@ -587,21 +587,24 @@ def biggerdenied(denied_zones,px):
     return denied_zones
 bigger_denied_zones=biggerdenied(data["denied_zones"],15)
 data["denied_zones"]=bigger_denied_zones
+
 def findDRS(path_array):
-    drs_array=[]
-    for i in range(len(path_array)-2):
-        
-        
-        t_aci=math.atan2(path_array[i][0]-path_array[i+1][0],path_array[i][1]-path_array[i+1][1])
-        t_aci=math.degrees(t_aci)
-        aci=math.atan2(path_array[i+1][0]-path_array[i+2][0],path_array[i+1][1]-path_array[i+2][1])
-        aci=math.degrees(aci)
-    
-        if aci != t_aci:
-            make_point=[path_array[i][0],path_array[i][1]]
-            drs_array.append(make_point)
-    return drs_array
-            
+        drs_array=[]
+        drs_array.append(path_array[0])
+        for i in range(len(path_array)-2):
+            t_aci=math.atan2(path_array[i][0]-path_array[i+1][0],path_array[i][1]-path_array[i+1][1])
+            t_aci=math.degrees(t_aci)
+            aci=math.atan2(path_array[i+1][0]-path_array[i+2][0],path_array[i+1][1]-path_array[i+2][1])
+            aci=math.degrees(aci)
+            aci=t_aci-aci
+            aci=math.sqrt(aci**2)
+            if aci>10:
+                make_point=[path_array[i+1][0],path_array[i+1][1]]
+                drs_array.append(make_point)
+        drs_array.append(path_array[-1])
+        return drs_array
+
+           
     
 
 
@@ -706,7 +709,7 @@ subareas=maxQ_Areas+subareas
 
 path_for_subareas={}
 temp=[]
-px=20
+px=25
 path_keys=[]
 top_right=max(data["world_boundaries"])
 for path_point in range(0,data["world_length"],px):
@@ -910,9 +913,6 @@ for i in range(len(test_rotation)-2):
     #    print(aci,t_aci)
     #    plt.plot(plot_path[:,0], plot_path[:,1], 'r.')
     #    t_aci=aci
-        
-
-
 
 
 #rotationplot=np.array(rotationpath)
@@ -924,6 +924,13 @@ sorted_keys=[]
 for i in range(len(sorted_subareas)):
     x=str(hash(str(sorted_subareas[i])))
     sorted_keys.append(x)
+
+
+x=path_keys[12]
+path=path_for_subareas[str(x)]
+t_drs=findDRS(path)
+t_drs=np.array(t_drs)
+plt.plot(t_drs[:,0], t_drs[:,1], 'g.')
     
 
 
