@@ -1,19 +1,20 @@
 from base.base_uav import BaseUAV
-import numpy as np
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 from scipy.spatial import ConvexHull
 import matplotlib.path as mpltPath
+import numpy as np
 import math
 import random
 import util
 import time
-
-
+import json
+import ast
 
 class KagUAV(BaseUAV):
 
     def initialize(self):
+        self.px=20 #path yakinligi
         self.fallback=False
         self.temp = 0
         self.pid_flag=False
@@ -24,6 +25,7 @@ class KagUAV(BaseUAV):
         self.egilmeFlag = 0
         self.yukselmeFlag = 0
         self.carpismaCemberi = 30
+        self.defter = []# uav_link gps bozuklugu durumunda regresyon ile konum guncelleyecek aksi durumda ayni veriler devam edecek
         #
         self.iteration_count = 0
         self.home = None
@@ -75,27 +77,144 @@ class KagUAV(BaseUAV):
         self.yloc = None
         self.alt_lock = None
         self.cruise_control = False
+        self.scan_path=None
+        self.a=True# gecici gidecek
+        self.altitude_control=55
+        self.scan_path=None
+        self.rotation_array=None
+        self.drs_direct_points=[]
+        self.status=None
 
     def act(self):
-        #pathplanning
-        self.pathplanning()
+        if self.a:
+            self.px=self.cam_sensor_width()
+            print(self.px)
+            self.path_planning(self.params,self.px)
+            #print(self.sorted_path_keys)
+            #f = open("path.txt", "r")
+            #self.path_for_subareas=f.read()
+            #f.close()
+            #self.sorted_subareas=['4704184719677713798', '2911962086084024377', '4157944647003942593', '-4231478553723308623', '3003211346130222207', '6412961332130656619', '-4424523461214436489', '-2062939265917383133', '-6079117805880473676', '-5321903644890423631', '-375550012774609049', '-4460129885101970127', '2625842899872304767', '1014477751578702442', '-3736899859416314598']
+            #self.path_for_subareas=dict(self.path_for_subareas)
+            #print(self.path_for_subareas)
+            #f = open("sorted.txt", "r")
+            #self.sorted_subareas =f.read()
+            #f.close()
+            self.a=False
+
+
         # umutun ve erenin codelari duzenlendi
         self.starting_func() # baslangic konum degerleri kayidi
-        self.speed_calc() # gps bozuklugu durumu speed hesabi
         self.time_calc() # location_calc icin paket suresi guncellemesi
+        self.speed_calc() # gps bozuklugu durumu speed hesabi
         self.location_calc() # gps bozuklugu durumu location hesabi
         self.process_uav_msg() # gps degerleri self.pose a aktarilir
+        #self.updateUAVLink() komsu ihalara lineer regresyon uygulayan sistem suanlik devredisi
         self.force_vector_calc() # carpismadan kacinma icin kuvvet hesabi
         self.col_avo() # kuvvetin iha dinamigine aktarimi
         self.brake_calc() # max speed hesabi
-        print("self.operation_phase =", self.operation_phase)
-        self.pre_formation()
-        self.formation_func() # formasyon motoru
-        self.amifallback() # geri donus karar verme araci
-        self.move_to_home() # eve donus komutu
+        #print("self.operation_phase =", self.operation_phase)
+        #self.poz = 2400, 300, 100
+        #self.move_to_target(self.poz)
+        #self.pre_formation()
+        #self.formation_func() # formasyon motoru
+        #self.amifallback() # geri donus karar verme araci
+        #self.move_to_home() # eve donus komutu
+        self.scanloop()
+        #print(self.uav_msg["casualties_in_world"])
+
+    def scanloop(self):
+        print("scan loop")
+        print(self.status)
+
+        #bolgeyi sec
+        #print(self.sorted_tasks_hash,"hmmm")
+        if self.scan_path==None:
+            print("scan path olusturuldu")
+            scan_id=self.sorted_tasks_hash[self.uav_id][0][0]#deneme
+            print(scan_id)
+            #print(self.path_for_subareas.keys())
+            self.scan_path=self.path_for_subareas[scan_id]
+            #rotasyona gerek yoksa.
+        if self.dist(self.scan_path[0],[self.pose[0],self.pose[1]])<=self.px*2:
+            if len(self.drs_direct_points)==0:
+                #print("yeni drs")
+                self.drs_direct_points=self.findDRS(self.scan_path)
+            self.status="scan"
+            self.rotation_array=None
+            self.altitude_control=self.params["logical_camera_height_max"]-0.5
+            self.instant_path=self.scan_path
+            #rotasyona gerek varsa
+        if self.dist(self.scan_path[0],[self.pose[0],self.pose[1]])>self.px*2 and self.rotation_array==None:
+            if len(self.drs_direct_points)==0:
+                #print("yeni drs")
+                self.drs_direct_points=self.findDRS(self.scan_path)
+            self.rotation_array=self.findRotationPath(self.bigger_denied_zones,[self.pose[0],self.pose[1]],self.scan_path[0],self.px)
+            self.status="rotation"
+            self.altitude_control=self.params["telecom_height_max"]-0.5
+            self.instant_path=self.rotation_array
+        self.move_to_path(self.instant_path[0])
+        print("scan icin kalan mesafe ",self.dist([self.pose[0],self.pose[1]],self.scan_path[0]))
+        print("hedef path ",self.dist([self.pose[0],self.pose[1]],self.instant_path[0]))
+        print("drs mesafesi ",self.dist([self.pose[0],self.pose[1]],self.drs_direct_points[0]))
+        if self.instant_path!=None and self.drs_direct_points!=None:
+            if self.dist(self.instant_path[0],[self.pose[0],self.pose[1]])<10:
+                #print("ulasildi",self.rotation_array[0])
+                self.instant_path.pop(0)
+            if self.dist(self.drs_direct_points[0],[self.pose[0],self.pose[1]])<5:
+                #print("drs bolgesine ulasildi")
+                self.drs_direct_points.pop(0)
+            if self.status=="scan":
+                print("slm")
+                if len(self.instant_path)==0:
+                    self.sorted_tasks_hash[self.uav_id].pop(0)
+                    self.scan_path=None
+    def move_to_path(self, target_position):
+        #self.drs_direct_points
+        #self.rotation_array
+        dist = util.dist([self.drs_direct_points[0][0],self.drs_direct_points[0][1]], self.pose)
+        target_angle = math.atan2(target_position[0]-self.pose[0], -(target_position[1]-self.pose[1]))
+        target_angle = math.degrees(target_angle)
+
+        x_speed, y_speed=self.getXY_forpath(target_position[0], target_position[1], self.maxSpeed)
+        x_speed = self.xspeedaddition + x_speed
+        y_speed = self.yspeedaddition + y_speed
+        '''
+        if target_position[2] < 1.0:
+            target_position[2] = 1.0
+        if dist > 30.0:
+        	x_speed = 20.0
+        '''
+        self.target_speed = [x_speed *  1.00133, y_speed *  1.00133]
+        self.send_move_cmd(x_speed, y_speed, target_angle, self.altitude_control)
+    def getXY_forpath(self,x,y,speed):
+        target_position=[x,y]
+        head=self.uav_msg["active_uav"]["heading"]
+        targetAngle=self.findAngle(x,y)
+        if targetAngle <0:
+            targetAngle=360+targetAngle
+        head=head-targetAngle
+        #target_position=[x,y]
+        #dist = util.dist(target_position, self.pose)
+        head=math.radians(head)
+        yy=math.sin(head)
+        xx=math.cos(head)
+        dist = util.dist([self.drs_direct_points[0][0],self.drs_direct_points[0][1]], self.pose)
+        #print(dist,"mesafe")
+        #self.PID(0.5,0.0,35.0)
+        self.PID(0.5,0.0,35.0)
+        hm=self.Update(dist)
+        #print(hm)
+        if hm>speed:
+            hm=speed
+        xx=xx*hm
+        yy=yy*hm
+        #print("istenen:",xx,yy)
+        return xx,yy
+
 
     def acc_calc(self, Speed_diff):
-        print("timediff for speed =", self.timediff)
+        #print("timediff for speed =", self.timediff)
         #print("speed diff", Speed_diff[0], Speed_diff[1])
         if(Speed_diff[0] <= 5 and Speed_diff[0] >= -5):
             #print("xDiff = ", Speed_diff[0], "*", self.timediff, " = ", 0.00115148 * Speed_diff[0] * self.timediff)
@@ -136,30 +255,30 @@ class KagUAV(BaseUAV):
         if(self.uav_msg['uav_guide']['gps_noise_flag'] == True):
             Speed_diff = [self.target_speed[0] - self.current_speed[0], self.target_speed[1] - self.current_speed[1]]
             xAddition, yAddition = self.acc_calc(Speed_diff)
-            print("tahmini acc =", xAddition, yAddition)
+            #print("tahmini acc =", float(xAddition), float(yAddition))
             self.current_speed = [self.current_speed[0] + xAddition, self.current_speed[1] + yAddition]
-            print("tahmini x and y speed = ",self.current_speed[0], self.current_speed[1])
+            #print("tahmini x and y speed = ", int(self.current_speed[0]), int(self.current_speed[1]))
         else:
             self.current_speed = [self.uav_msg['active_uav']['x_speed'], self.uav_msg['active_uav']['y_speed']]
-        print("real x and y speed = ", self.uav_msg['active_uav']['x_speed'], self.uav_msg['active_uav']['y_speed'])
+        #print("real x and y speed = ", self.uav_msg['active_uav']['x_speed'], self.uav_msg['active_uav']['y_speed'])
 
     def ljp(self, r, epsilon, sigma):
-        if(r == self.carpismaCemberi):
+        if(r == self.uav_msg['uav_formation']['u_b'] - 2):
             return 0
         else:
-            return 48 * epsilon * np.power(sigma, 12) / np.power(r-self.carpismaCemberi, 13) \
-            - 24 * epsilon * np.power(sigma, 6) / np.power(r-self.carpismaCemberi, 7)
+            return 48 * epsilon * np.power(sigma, 12) / np.power(r-self.uav_msg['uav_formation']['u_b'] - 2, 13) \
+            - 24 * epsilon * np.power(sigma, 6) / np.power(r-self.uav_msg['uav_formation']['u_b'] - 2, 7)
 
     def col_avo(self):
         colTempAngle = (self.uav_msg["active_uav"]['heading'] - self.collisionAngle - 90) % 360
         #print("colTempAngle = ", colTempAngle)
         self.yspeedaddition = -math.cos(math.radians(colTempAngle))*self.collisionMagnitude
         self.xspeedaddition = math.sin(math.radians(colTempAngle))*self.collisionMagnitude
-        print("col avo speed = ", int(self.xspeedaddition), int(self.yspeedaddition))
+        #print("col avo speed = ", int(self.xspeedaddition), int(self.yspeedaddition))
 
     def altitude_controller(self):
         tempAngle = self.collisionAngle
-        print("heading and colheading =", self.uav_msg["active_uav"]['heading'], self.collisionAngle)
+        #print("heading and colheading =", self.uav_msg["active_uav"]['heading'], self.collisionAngle)
         #iha cok hizliyken kontrollu gerceklesmeli
         if(tempAngle <= (self.uav_msg["active_uav"]['heading']+2)%360 and tempAngle >= (self.uav_msg["active_uav"]['heading']-2)%360):
             #print("deadlock_error")
@@ -172,14 +291,11 @@ class KagUAV(BaseUAV):
 
     def brake_calc(self):
         brake_temp = 0
-        brake_var = 0, 0
-        distancex = 0
-        distancey = 0
+        brake_var = 0
         for i in range(len(self.uav_msg['uav_link'])):
-            a = self.uav_msg["uav_link"][i].keys()
-            uav_name = a[0][4]
-            uav_name = str(uav_name)
-            if uav_name != str(self.uav_id):
+            uav_name = self.uav_msg["uav_link"][i].keys()
+            uav_name = uav_name[0][4:]
+            if int(uav_name) != self.uav_id:
                 #i numarali ihanin speed izdusumleri.
                 tempx = math.sin(math.radians(self.uav_msg["uav_link"][i].values()[0]["heading"])) * self.uav_msg["uav_link"][i].values()[0]["speed"]['x']
                 tempx = tempx + math.sin((math.radians((self.uav_msg["uav_link"][i].values()[0]["heading"] - 90.0) % 360.0))) * self.uav_msg["uav_link"][i].values()[0]["speed"]['y']
@@ -194,47 +310,53 @@ class KagUAV(BaseUAV):
                 magnOfSpeed = math.sqrt((tempx)**2+(tempy)**2)
                 #aralarindaki mesafe
                 distance = math.sqrt((self.uav_msg["uav_link"][i].values()[0]["location"][0] - self.pose[0])**2 + (self.uav_msg["uav_link"][i].values()[0]["location"][1] - self.pose[1])**2)
-                danger_calc = distance - (magnOfSpeed * 5.6)#5.6
-                if(danger_calc < brake_temp):
-                    distancex, distancey = (self.uav_msg["uav_link"][i].values()[0]["location"][0] - self.pose[0])/distance, (self.uav_msg["uav_link"][i].values()[0]["location"][1] - self.pose[1])/distance
+                gg = 3.121 * np.power(distance, 0.5342) + 4.214
+                #danger_calc = distance - (magnOfSpeed * 5.6)
+                danger_calc = gg - magnOfSpeed
+                if(danger_calc > brake_temp):
+                    #distancex, distancey = (self.uav_msg["uav_link"][i].values()[0]["location"][0] - self.pose[0])/distance, (self.uav_msg["uav_link"][i].values()[0]["location"][1] - self.pose[1])/distance
                     brake_temp = danger_calc
-                    brake_var = distance, magnOfSpeed
-                else:
-                    continue
-                #print("warning for =", i, "th IHA distance and speed = ", distance, magnOfSpeed)
-        distance, magnOfSpeed = brake_var
-        self.maxSpeed = abs(brake_temp / 5.6)
-        self.maxSpeed = 90 - self.maxSpeed
-        print("max speed =", self.maxSpeed)
-        print("real speed =", self.uav_msg['active_uav']['x_speed'], self.uav_msg['active_uav']['y_speed'])
-        self.brakeMagnitude = magnOfSpeed - self.maxSpeed
-        self.brakeAngle = math.degrees(math.atan2(distancex, -distancey))
+                    brake_var = gg
+                    #print("warning for =", i, "th IHA distance and speed = ", distance, magnOfSpeed)
+        #distance, magnOfSpeed = brake_var
+        #print("brake_temp", brake_temp)
+        #print("brake_var", brake_var)
+        if(brake_var > 90):
+            brake_var = 90
+        if len(self.uav_msg['uav_link']) == 1:
+            brake_var = 90
+        self.maxSpeed = brake_var
+        #self.maxSpeed = abs(brake_temp / 5.6)
+        #self.maxSpeed = 90 - self.maxSpeed
+        #print("max speed =", self.maxSpeed)
+        #print("real speed =", self.uav_msg['active_uav']['x_speed'], self.uav_msg['active_uav']['y_speed'])
+        #self.brakeMagnitude = magnOfSpeed - self.maxSpeed
+        #self.brakeAngle = math.degrees(math.atan2(distancex, -distancey))
         #print("total brake(angle, magnitude) =", self.brakeAngle, self.brakeMagnitude)
 
     def force_vector_calc(self):
         ux = 0
         uy = 0
         for i in range(len(self.uav_msg['uav_link'])):
-            a=self.uav_msg["uav_link"][i].keys()
-            uav_name=a[0][4]
-            uav_name=str(uav_name)
-            if uav_name != str(self.uav_id) and self.pose[3] :
+            uav_name = self.uav_msg["uav_link"][i].keys()
+            uav_name = uav_name[0][4:]
+            if int(uav_name) != self.uav_id and self.uav_msg['uav_formation']['u_b'] - 10 >= abs(self.uav_msg["uav_link"][i].values()[0]["altitude"] - self.pose[2]):
+                #print("col avo id =", int(uav_name))
                 distance = math.sqrt((self.uav_msg["uav_link"][i].values()[0]["location"][0] - self.pose[0])**2 + (self.uav_msg["uav_link"][i].values()[0]["location"][1] - self.pose[1])**2)
-                #print(i, "th IHA distance = ", distance)
                 distancex, distancey = (self.uav_msg["uav_link"][i].values()[0]["location"][0] - self.pose[0])/distance, (self.uav_msg["uav_link"][i].values()[0]["location"][1] - self.pose[1])/distance
                 u = self.ljp(distance, self.LJP_EPSILON, self.LJP_SIGMA)
                 ux = ux + u*distancex
                 uy = uy + u*distancey
-                #print(i, "th IHA forces = ", int(u*distancex), int(u*distancey))
         self.collisionAngle = math.atan2(ux, -uy)
         self.collisionAngle = math.degrees(self.collisionAngle)
         self.collisionMagnitude = math.hypot(ux,uy)
-        #print("avoidance force = " , ux , " , " , uy)
+        #print("avoidance force = " , ux , uy)
         #print("total vector(angle, magnitude) = ", self.collisionAngle, self.collisionMagnitude)
 
     def time_calc(self):
         if(self.temp >= 1):
             self.timediff = self.uav_msg['sim_time'] - self.time
+            #print("timediff for loc", self.timediff)
         else:
             self.time = self.uav_msg['sim_time']
 
@@ -250,11 +372,11 @@ class KagUAV(BaseUAV):
             self.instantydiff = self.averagey * self.timediff / self.locdifftemp
             #self.headingdiff = self.uav_msg["active_uav"]['heading'] - self.oldheading
             self.realgps = [self.realgps[0] + self.instantxdiff, self.realgps[1] + self.instantydiff]
-            print("tahmini gps = ",self.realgps[0], self.realgps[1])
-            print("real gps = ", self.uav_msg['active_uav']['location'][0], self.uav_msg['active_uav']['location'][1])
-            print("average x and y = ", self.averagex, self.averagey)
-            print("timediff = ", self.timediff)
-            print("tahmini yer degisirme = ", self.instantxdiff, self.instantydiff)
+            #print("tahmini gps = ",self.realgps[0], self.realgps[1])
+            #print("real gps = ", self.uav_msg['active_uav']['location'][0], self.uav_msg['active_uav']['location'][1])
+            #print("average x and y = ", self.averagex, self.averagey)
+            #print("timediff = ", self.timediff)
+            #print("tahmini yer degisirme = ", self.instantxdiff, self.instantydiff)
         self.x = math.sin(math.radians(self.uav_msg["active_uav"]['heading'])) * self.current_speed[0]
         self.x = self.x + math.sin((math.radians((self.uav_msg["active_uav"]['heading'] - 90.0) % 360.0))) * self.current_speed[1]
         self.y = -math.cos(math.radians(self.uav_msg["active_uav"]['heading'])) * self.current_speed[0]
@@ -283,6 +405,7 @@ class KagUAV(BaseUAV):
             if not self.uav_msg['uav_guide']['dispatch']:
                 self.formation_setup()
                 self.gps_alt = self.pose[2]
+                #print("formation target =", self.target_position[0], self.target_position[1])
                 self.move_to_target(self.target_position)
             else:
                 self.operation_phase = self.operation_phase + 2 # formasyon bittiyse sonraki adima gecis
@@ -312,7 +435,7 @@ class KagUAV(BaseUAV):
             self.injury_load_process(hospital_xy, 'unload')
         else:
             self.injury_operation_phase = 0
-            print('hoooraaaaa! We saved mother russia!')
+            #print('hoooraaaaa! We saved mother russia!')
             pass
 
     def injury_load_process(self, target, load_type):
@@ -378,7 +501,7 @@ class KagUAV(BaseUAV):
             self.set_formation_id()
             self.pick_formation_id = False
         self.target_position = self.formation[self.formation_type][self.formation_id]
-        print(self.formation[self.formation_type])
+        #print(self.formation[self.formation_type])
 
     def formation_move(self, target_position):
         dist = util.dist(target_position, self.pose)
@@ -399,6 +522,10 @@ class KagUAV(BaseUAV):
         self.send_move_cmd(x_speed, 0.0, target_angle, target_position[2])
 
     def move_to_target(self, target_position):
+
+
+
+
         dist = util.dist(target_position, self.pose)
         target_angle = math.atan2(target_position[0]-self.pose[0], -(target_position[1]-self.pose[1]))
         target_angle = math.degrees(target_angle)
@@ -406,12 +533,14 @@ class KagUAV(BaseUAV):
         x_speed, y_speed=self.getXY(target_position[0], target_position[1], self.maxSpeed)
         x_speed = self.xspeedaddition + x_speed
         y_speed = self.yspeedaddition + y_speed
+        '''
         if target_position[2] < 1.0:
             target_position[2] = 1.0
         if dist > 30.0:
         	x_speed = 20.0
+        '''
         self.target_speed = [x_speed *  1.00133, y_speed *  1.00133]
-        self.send_move_cmd(x_speed,y_speed, target_angle, target_position[2])
+        self.send_move_cmd(x_speed, y_speed, target_angle, self.altitude_control)
 
     def reached(self, dist):
         if dist < 3:
@@ -439,6 +568,73 @@ class KagUAV(BaseUAV):
         self.a_k = self.uav_msg['uav_formation']['a_k']
         self.u_b = self.uav_msg['uav_formation']['u_b']
         self.u_k = self.uav_msg['uav_formation']['u_k']
+
+    '''
+    def noise_filter(self,data):
+        loc_y=data["active_uav"]["location"][1]
+        loc_x=data["active_uav"]["location"][0]
+        if len(self.defterx)<=12:
+            self.defterx.append(loc_x)
+            self.deftery.append(loc_y)
+        if len(self.defterx)==12:
+            self.defterx.pop(0)
+            self.deftery.pop(0)
+        if data["uav_guide"]["gps_noise_flag"] == True:
+
+            inds = arange(0,11)
+            slope, intercept, r_value, p_value, std_err = stats.linregress(inds,self.defterx)
+            linex = slope*inds+intercept
+            tahminX=linex[5]
+            slope, intercept, r_value, p_value, std_err = stats.linregress(inds,self.deftery)
+            liney = slope*inds+intercept
+            tahminY=liney[5]
+            print("tahmin",tahminX,tahminY)
+            print("reel",loc_x,loc_y)
+            return [tahminX,tahminY]
+    '''
+    def updateUAVLink(self):
+        data = self.prepareUAVLink()
+        for i in range(len(data)):
+            if(data[i][2] != -1 ): #veri guncellendiyse
+                #veriyi kullan
+                loc_y=data[i][0]
+                loc_x=data[i][1]
+                print(len(self.defter[i][0]))
+                if len(self.defter[i])<=12:
+                    self.defter[i][0].append(loc_x)
+                    self.defter[i][1].append(loc_y)
+                if len(self.defter[i][0]) == 12:
+                    self.defter[i][0].pop(0)
+                    self.defter[i][1].pop(0)
+                if self.uav_msg['uav_guide']['gps_noise_flag']:
+                    inds = arange(0,11) # bu nedir bilmorm
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(inds, self.defter[i][0])
+                    linex = slope*inds+intercept
+                    tahminX=linex[5]
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(inds,self.defter[i][0])
+                    liney = slope*inds+intercept
+                    tahminY=liney[5]
+                    print("tahmin",tahminX,tahminY)
+                    print("reel",loc_x,loc_y)
+        #return [tahminX,tahminY]
+
+    def prepareUAVLink(self):
+        data = []
+        if len(data) == 0:
+            print("bum")
+            for i in range(len(self.uav_msg['uav_link'])):
+                loc = []
+                loc.append(0)
+                loc.append(0)
+                loc.append(-1)
+                data.append(loc);
+        for i in range(len(self.uav_msg['uav_link'])):
+            uav_name = self.uav_msg["uav_link"][i].keys()
+            uav_name = uav_name[0][4:]
+            if int(uav_name) != self.uav_id:
+                data[int(uav_name)] = [self.uav_msg["uav_link"][i].values()[0]["location"][0], self.uav_msg["uav_link"][i].values()[0]["location"][1], self.uav_msg["uav_link"][i].values()[0]["altitude"]]
+        print(data)
+        return data
 
     def set_formation_id(self):
         uav_position_list = []
@@ -623,14 +819,15 @@ class KagUAV(BaseUAV):
         xx=math.cos(head)
         dist = util.dist(target_position, self.pose)
         #print(dist)
-        self.PID(0.5,0.0,35.0)
+        #self.PID(0.5,0.0,35.0)
+        self.PID(10,0.0,35.0)
         hm=self.Update(dist)
         #print(hm)
         if hm>speed:
             hm=speed
         xx=xx*hm
         yy=yy*hm
-        #print("istenen:",xx,yy)
+        print("istenen:",xx,yy)
         return xx,yy
 
     def findAngle(self,x,y):
@@ -645,7 +842,6 @@ class KagUAV(BaseUAV):
         return angle
     def point_control(self,zones,point):
         i=0
-
         tik=0
         for i in range (len(zones)):
             bolge=mpltPath.Path(zones[i])
@@ -688,7 +884,7 @@ class KagUAV(BaseUAV):
                         return pack
         return pack
 
-    def unpack (self,zone,dilim,data,px):
+    def unpack(self, zone, dilim, data, px):
         top=data["world_boundaries"]
         top=max(top)
         zone_stop=-9999999999
@@ -764,7 +960,7 @@ class KagUAV(BaseUAV):
 
                 if paket[2]!=0:
 
-                    new_start=unpack(paket[2],denied_start,data,px)
+                    new_start=self.unpack(paket[2],denied_start,data,px)
                     if new_start[0] not in stack_point:
                         stack_area.append(new_start[1])
                         stack_point.append(new_start[0])
@@ -802,14 +998,14 @@ class KagUAV(BaseUAV):
                     break
         return cells
 
-    def inDeniedZone(self,p):
+    def inDeniedZone(self, p, deniedZones):
         for polygon in deniedZones:
             path = mpltPath.Path(polygon)
             if path.contains_points(p):
                 return True
         return False
 
-    def notInDeniedZone(self,p):
+    def notInDeniedZone(self, p, deniedZones):
         for polygon in deniedZones:
             path = mpltPath.Path(polygon)
             if path.contains_points(p):
@@ -829,71 +1025,72 @@ class KagUAV(BaseUAV):
 
 
 
-    def makeClusters(self):
+    def makeClusters(self, data):
         for building in data['special_assets']:
             if building['type'] == 'tall_building':
                 for p in building['locations']:
-                    if self.notInDeniedZone([p]):
-                        special_assets.append({
+                    if self.notInDeniedZone([p],data["denied_zones"]):
+                        self.special_assets.append({
                             'p':[
-                                float(p[0] + position_offset),
-                                float(p[1] + position_offset)
+                                float(p[0] + self.position_offset),
+                                float(p[1] + self.position_offset)
                             ],
                             'c': 0
                         })
             else:
-                special_assets.append({
+                self.special_assets.append({
                     'p':[
-                        float(building['location']['x'] + position_offset),
-                        float(building['location']['y'] + position_offset)
+                        float(building['location']['x'] + self.position_offset),
+                        float(building['location']['y'] + self.position_offset)
                     ],
                     'c': 0
                 })
-                special_assets.append({
+                self.special_assets.append({
                     'p':[
-                        float(building['location']['x'] + position_offset),
-                        float(building['location']['y'] + position_offset)
+                        float(building['location']['x'] + self.position_offset),
+                        float(building['location']['y'] + self.position_offset)
                     ],
                     'c': 0
                 })
-        global cluster_count
-        global cluster_element_treshold
-        for i in range(len(special_assets)):
+        self.cluster_count
+        self.cluster_element_treshold
+        for i in range(len(self.special_assets)):
             neighbour_index_list = [i]
-            base_point = special_assets[i]
-            if not cluster_count:
-                for j in range(len(special_assets)):
+            base_point = self.special_assets[i]
+            if not self.cluster_count:
+                for j in range(len(self.special_assets)):
                     if(j != i):
-                        d = dist(base_point['p'], special_assets[j]['p'])
-                        if d <= bridge_length:
+                        d = self.dist(base_point['p'], self.special_assets[j]['p'])
+                        if d <= self.bridge_length:
                             neighbour_index_list.append(j)
-                if len(neighbour_index_list) > cluster_element_treshold:
-                    cluster_count = cluster_count + 1
+                if len(neighbour_index_list) > self.cluster_element_treshold:
+                    self.cluster_count = self.cluster_count + 1
                     for j in neighbour_index_list:
-                        special_assets[j]['c'] = cluster_count
+                        self.special_assets[j]['c'] = self.cluster_count
             else:
                 if base_point['c']:
-                    for j in range(len(special_assets)):
-                        if(j != i) and (not special_assets[j]['c']):
-                            d = dist(base_point['p'], special_assets[j]['p'])
-                            if d <= bridge_length:
-                                special_assets[j]['c'] = base_point['c']
+                    for j in range(len(self.special_assets)):
+                        if(j != i) and (not self.special_assets[j]['c']):
+                            d = self.dist(base_point['p'], self.special_assets[j]['p'])
+                            if d <= self.bridge_length:
+                                self.special_assets[j]['c'] = base_point['c']
                 else:
-                    for j in range(len(special_assets)):
-                        d = dist(base_point['p'], special_assets[j]['p'])
-                        if d <= bridge_length:
-                            if(j != i) and (special_assets[j]['c']):
-                                special_assets[i]['c'] = special_assets[j]['c']
+                    for j in range(len(self.special_assets)):
+                        d = self.dist(base_point['p'], self.special_assets[j]['p'])
+                        if d <= self.bridge_length:
+                            if(j != i) and (self.special_assets[j]['c']):
+                                self.special_assets[i]['c'] = self.special_assets[j]['c']
                                 break
                             neighbour_index_list.append(j)
-                    if special_assets[i]['c']:
+                    if self.special_assets[i]['c']:
                         continue
-                    elif len(neighbour_index_list) > cluster_element_treshold:
-                        cluster_count += 1
+                    elif len(neighbour_index_list) > self.cluster_element_treshold:
+                        self.cluster_count += 1
                         for j in neighbour_index_list:
-                            special_assets[j]['c'] = cluster_count
+                            self.special_assets[j]['c'] = self.cluster_count
+
     def normalPos(self,p):
-        return [p[0] - position_offset, p[1] - position_offset]
+        return [p[0] - self.position_offset, p[1] - self.position_offset]
 
     def unpacked_cluster(self,clusters,width):
         mask_for_cluster=[]
@@ -1027,12 +1224,12 @@ class KagUAV(BaseUAV):
         return angle
 
 
-    def findRotationPath(self,deniedzones,allpath,start,finish,px):
+    def findRotationPath(self,deniedzones,start,finish,px):
         deltax=finish[0]-start[0]
         deltay=finish[1]-start[1]
-        distance=dist(start,finish)
+        distance=self.dist(start,finish)
         rotationPath=[]
-        distance_px=distance/10
+        distance_px=distance/px
         x_px=deltax/distance_px
         y_px=deltay/distance_px
         start_t=start
@@ -1095,7 +1292,7 @@ class KagUAV(BaseUAV):
             make_point=[start_t[0]+x_px,start_t[1]]
             start_t=make_point
             rotationPath.append(make_point)
-            distance=dist(start_t,finish)
+            distance=self.dist(start_t,finish)
             pack=self.point_control(deniedzones,make_point)
             if pack[0]==True:
                 C=1
@@ -1168,20 +1365,62 @@ class KagUAV(BaseUAV):
                     start_t=loc
                     whiledist=self.dist(start_t,finish)
                     rotationPath.append(start_t)
+        rotationPath.append(finish)
         return rotationPath
+    def cam_sensor_width(self):
+        aci=self.params["logical_camera_horizontal_fov"]/2
+        self.scan_height=self.params["logical_camera_height_max"]-0.5
+        baci=180-(aci+90)
+        baci_r=math.radians(baci)
+        baci_sin=math.sin(baci_r)
+        baci_cos=math.cos(baci_r)
+        hipo=self.scan_height/baci_sin
+        width=hipo*baci_cos*2#feet
+        width=(0.3048*width)#metre
+        width=int(width)
+        return width
 
-    def path_planning(self,data):
 
-        #bölgeler kümelendi "special_assets" diye
-        self.makeClusters()
-        for i in range(len(special_assets)):
-            special_assets[i]['p'] = self.normalPos(special_assets[i]['p'])
+    def path_planning(self, data,px):
+        self.bigger_denied_zones=self.biggerdenied(data["denied_zones"],35)
+        #print(self.bigger_denied_zones)
+
+        tall_index = 0
+        while(data['special_assets'][tall_index]['type'] != 'tall_building'):
+            tall_index += 1
+        self.special_assets = []
+        tall_count = len(data['special_assets'][tall_index]['locations'])
+
+        #if data['special_assets'][tall_index]['width'][0] > data['special_assets'][tall_index]['width'][1]:
+        #    bridge_length = data['special_assets'][tall_index]['width'][0] * 100
+        #else:
+        #    bridge_length = data['special_assets'][tall_index]['width'][1] * 2.5
+        self.bridge_length = 100.0
+        self.cluster_count = 0
+        self.cluster_element_treshold = 3
+
+        deniedZones = data['denied_zones']
+        self.position_offset = float(data['world_length'] / 2)
+        color_cursor = 0
+        colors = [
+            'black',
+            'red',
+            'green',
+            'blue',
+            'magenta',
+            'yellow',
+            'cyan',
+        ]
+        #bolgeler kumelendi "special_assets" diye
+        self.makeClusters(data)
+        for i in range(len(self.special_assets)):
+            self.special_assets[i]['p'] = self.normalPos(self.special_assets[i]['p'])
 
 
         clusters=[]
-        for i in range(cluster_count+1):
+        for i in range(self.cluster_count+1):
             clusters.append([])
-        for i in special_assets:
+        for i in self.special_assets:
             clusters[i["c"]].append(i["p"])
 
         mask_for_cluster=self.unpacked_cluster(clusters,75)
@@ -1193,9 +1432,9 @@ class KagUAV(BaseUAV):
             merge_tall=np.array(merge_tall)
             temp_mask_for_cluster.append(merge_tall)
             merge_tall=[]
-        #kümelenme bitti
+        #kumelenme bitti
 
-        #kritik bölgeler "maxQ_areas" adı altında kabuklandı
+        #kritik bolgeler "maxQ_areas" adi altinda kabuklandi
         i=0
         maxQ_Areas=[]
         for i in range(1,len(temp_mask_for_cluster)):
@@ -1204,18 +1443,18 @@ class KagUAV(BaseUAV):
             temp=list(points[hull.vertices])
             maxQ_Areas.append(temp)
 
-        #uzun bina lokasyonları polygon için ayarlandı
+        #uzun bina lokasyonlari polygon icin ayarlandi
         tall_locs_=[]
         for t in range(len(data["special_assets"])):
             if data["special_assets"][t]["type"]=="tall_building":
-                #büyüklüğü 10 arttırıldı binaların
-                tall_width=data["special_assets"][t]["width"]+10
+                #buyuklugu 10 arttirildi binalarin
+                tall_width=max(data["special_assets"][t]["width"])+10
                 tall_locs=data["special_assets"][t]["locations"]
                 for i in range(len(tall_locs)):
-                    tmp=[tall_locs[i][0]-(tall_width[0]/2),tall_locs[i][1]+(tall_width[0]/2)]
-                    tmps=[[tmp[0],tmp[1]],[tmp[0]+tall_width[0],tmp[1]],[tmp[0]+tall_width[0],tmp[1]-tall_width[0]],[tmp[0],tmp[1]-tall_width[0]]]
+                    tmp=[tall_locs[i][0]-(tall_width/2),tall_locs[i][1]+(tall_width/2)]
+                    tmps=[[tmp[0],tmp[1]],[tmp[0]+tall_width,tmp[1]],[tmp[0]+tall_width,tmp[1]-tall_width],[tmp[0],tmp[1]-tall_width]]
                     tall_locs_.append(tmps)
-        #hastane lokasyonları polygon için ayarlandı
+        #hastane lokasyonlari polygon icin ayarlandi
         h_locs=[]
         i=0
         h_width=60
@@ -1227,17 +1466,17 @@ class KagUAV(BaseUAV):
                 h_tmps=[[h_tmp[0],h_tmp[1]],[h_tmp[0]+h_width,h_tmp[1]],[h_tmp[0]+h_width,h_tmp[1]-h_height],[h_tmp[0],h_tmp[1]-h_height]]
                 h_locs.append(h_tmps)
 
-        # path için girilmemesi gereken bölgeler oluşturuldu denied zone ,uzun binalar , ve hastaneler.
-        data["denied_zones"]
-        all_denied=[]
-        all_denied=tall_locs_+h_locs+data["denied_zones"]
+        # path icin girilmemesi gereken bolgeler olusturuldu denied zone ,uzun binalar , ve hastaneler.
 
-        # hucreleme ıslemı ıcın kumenın dısında kalan yapılar ve denıed zone farklı bir liste yapıldı
+        all_denied=[]
+        all_denied=tall_locs_+h_locs+self.bigger_denied_zones
+
+        # hucreleme islemi icin kumenin disinda kalan yapilar ve denied zone farkli bir liste yapildi
         denied_for_bcd=[]
-        denied_for_bcd=data["denied_zones"]+mask_for_cluster[0]+maxQ_Areas
+        denied_for_bcd=self.bigger_denied_zones+mask_for_cluster[0]+maxQ_Areas
         area=data["world_boundaries"]
         subareas=self.BCD(denied_for_bcd,area,data,5)
-        #subareas adı altında hucreler olustu
+        #subareas adi altinda hucreler olustu
         i=0
         temp=[]
         subarea_dict={}
@@ -1248,9 +1487,7 @@ class KagUAV(BaseUAV):
         for i in range(len(subareas)):
             subarea_dict[str(hash(str(subareas[i])))]=subareas[i]
 
-
-
-        # olusan kritik bölgelerin yakınlıklarına gore hücreler sıralandı
+        # olusan kritik bolgelerin yakinliklarina gore hucreler siralandi
         #buyukten kucuge
         temp=[]
         sorted_subareas=self.sortSubareas(subareas,maxQ_Areas)
@@ -1261,18 +1498,18 @@ class KagUAV(BaseUAV):
         sorted_subareas=sorted_subareas[::-1]
 
 
-        #hucrelerin başına araştırılması öncelikli kümelenen bölgeler liste başına eklendi ki öncelik ordan başlasın
+        #hucrelerin basina arastirilmasi oncelikli kumelenen bolgeler liste basina eklendi ki oncelik ordan baslasin
         sorted_subareas=maxQ_Areas+sorted_subareas
         subareas=maxQ_Areas+subareas
 
 
-
-        #bu oluşan bölgeler için boktalar yerleştirildi rota için.
+        #bu olusan bolgeler icin boktalar yerlestirildi rota icin.
         path_for_subareas={}
         temp=[]
+        self.path_keys=[]
         top_right=max(data["world_boundaries"])
-        for path_point in range(0,data["world_length"],10):
-            for path_point1 in range (0,data["world_width"],10):
+        for path_point in range(0,data["world_length"],px):
+            for path_point1 in range (0,data["world_width"],px):
                 make_point=[top_right[0]-path_point,top_right[1]-path_point1]
                 ekle=1
                 for i in range (len(all_denied)):
@@ -1283,22 +1520,79 @@ class KagUAV(BaseUAV):
                     elif inside==False:
                         continue
                 if ekle==1:
-                    pack=point_control(subareas,make_point)
+                    pack=self.point_control(subareas,make_point)
                     hashh=hash(str(pack[1]))
                     if str(str(hashh)) in path_for_subareas:
 
                         temp=path_for_subareas[str(hashh)]
                         temp.append(make_point)
+                        if hashh not in self.path_keys:
+                            self.path_keys.append(hashh)
                         path_for_subareas[str(hashh)]=temp
                     else:
                         path_for_subareas[str(hashh)]=[make_point]
+        i=0
+        sorted_path_keys=[]
+        for i in range((len(sorted_subareas))):
+            sorted_path_keys.append(hash(str(sorted_subareas[i])))
+        #print(sorted_path_keys)
+        i=0
+        a=0
+        for i in range(len(sorted_path_keys)):
+            if sorted_path_keys[i-a] not in self.path_keys:
+                sorted_path_keys.pop(i-a)
+                a=a+1
 
 
-        #tüm bölgelere yol cizildi
-        for i in range(len(subareas)):
-            hashh=hash(str(subareas[i]))
-            new_path=self.findPath(hashh,path_for_subareas,10)
+
+
+        #tum bolgelere yol cizildi
+        for i in range(len(sorted_path_keys)):
+            hashh=sorted_path_keys[i]
+            new_path=self.findPath(hashh,path_for_subareas,px)
             path_for_subareas[str(hashh)]=new_path
+        tasks_hash=[]
+        for i in range(data["uav_count"]):
+            tasks_hash.append([])
+            i=0
+        for i in range(len(sorted_path_keys)):
+            j=i%data["uav_count"]
+            hashno=str(sorted_path_keys[i])
+            tasks_hash[j].append([hashno])
 
+        self.sorted_path_keys=sorted_path_keys
+        self.sorted_tasks_hash=tasks_hash
         self.sorted_subareas=sorted_subareas
         self.path_for_subareas=path_for_subareas
+
+    def findDRS(self,path_array):
+        drs_array=[]
+        drs_array.append(path_array[0])
+        for i in range(len(path_array)-2):
+            t_aci=math.atan2(path_array[i][0]-path_array[i+1][0],path_array[i][1]-path_array[i+1][1])
+            t_aci=math.degrees(t_aci)
+            aci=math.atan2(path_array[i+1][0]-path_array[i+2][0],path_array[i+1][1]-path_array[i+2][1])
+            aci=math.degrees(aci)
+            aci=t_aci-aci
+            aci=math.sqrt(aci**2)
+            if aci>10:
+                make_point=[path_array[i][0],path_array[i][1]]
+                drs_array.append(make_point)
+        drs_array.append(path_array[-1])
+        return drs_array
+
+    def biggerdenied(self,denied_zones,px):
+        for i in range(len(denied_zones)):
+            point=np.array(denied_zones[i])
+            x = point[:,0]
+            y = point[:,1]
+            center = [sum(x) / len(point), sum(y) / len(point)]
+            for j in range(len(denied_zones[i])):
+                distance=self.dist([denied_zones[i][j][0],denied_zones[i][j][1]],[center[0],center[1]])
+                px_x=denied_zones[i][j][0]-center[0]
+                px_y=denied_zones[i][j][1]-center[1]
+                px_x=(px_x/distance)*px
+                px_y=(px_y/distance)*px
+                denied_zones[i][j][0]=denied_zones[i][j][0]+px_x
+                denied_zones[i][j][1]=denied_zones[i][j][1]+px_y
+        return denied_zones
