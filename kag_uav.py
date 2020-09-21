@@ -29,6 +29,7 @@ class KagUAV(BaseUAV):
         #
         self.iteration_count = 0
         self.home = None
+
         self.start_loc = None
         self.fallback=False
         self.take_off = False
@@ -84,6 +85,8 @@ class KagUAV(BaseUAV):
         self.rotation_array=None
         self.drs_direct_points=[]
         self.status=None
+        self.paused_rotation_path=None
+        self.paused=None
 
     def act(self):
         if self.a:
@@ -126,53 +129,167 @@ class KagUAV(BaseUAV):
     def scanloop(self):
         print("scan loop")
         print(self.status)
+        self.inj_list=self.findainjured()
+        print(len(self.inj_list))
 
         #bolgeyi sec
         #print(self.sorted_tasks_hash,"hmmm")
-        if self.scan_path==None:
-            print("scan path olusturuldu")
-            scan_id=self.sorted_tasks_hash[self.uav_id][0][0]#deneme
-            print(scan_id)
-            #print(self.path_for_subareas.keys())
-            self.scan_path=self.path_for_subareas[scan_id]
+        if self.status!="paused":
+            if self.scan_path==None:
+                print("scan path olusturuldu")
+                scan_id=self.sorted_tasks_hash[self.uav_id][0][0]#deneme
+                print(scan_id)
+                #print(self.path_for_subareas.keys())
+                self.scan_path=self.path_for_subareas[scan_id]
+
             #rotasyona gerek yoksa.
-        if self.dist(self.scan_path[0],[self.pose[0],self.pose[1]])<=self.px*2:
-            if len(self.drs_direct_points)==0:
-                #print("yeni drs")
-                self.drs_direct_points=self.findDRS(self.scan_path)
-            self.status="scan"
-            self.rotation_array=None
-            self.altitude_control=self.params["logical_camera_height_max"]-0.5
-            self.instant_path=self.scan_path
+            if self.dist(self.scan_path[0],[self.pose[0],self.pose[1]])<=self.px*2:
+                self.rotation_array=None
+                self.altitude_control=self.params["logical_camera_height_max"]-0.5
+                self.scanAltitude=self.params["logical_camera_height_max"]-0.5
+                self.altitude_control=self.scanAltitude
+                self.instant_path=self.scan_path
+                self.drs_direct_points=self.findDRS(self.instant_path)
+
+
             #rotasyona gerek varsa
-        if self.dist(self.scan_path[0],[self.pose[0],self.pose[1]])>self.px*2 and self.rotation_array==None:
-            if len(self.drs_direct_points)==0:
-                #print("yeni drs")
-                self.drs_direct_points=self.findDRS(self.scan_path)
-            self.rotation_array=self.findRotationPath(self.bigger_denied_zones,[self.pose[0],self.pose[1]],self.scan_path[0],self.px)
-            self.status="rotation"
-            self.altitude_control=self.params["telecom_height_max"]-0.5
-            self.instant_path=self.rotation_array
-        self.move_to_path(self.instant_path[0])
-        print("scan icin kalan mesafe ",self.dist([self.pose[0],self.pose[1]],self.scan_path[0]))
-        print("hedef path ",self.dist([self.pose[0],self.pose[1]],self.instant_path[0]))
-        print("drs mesafesi ",self.dist([self.pose[0],self.pose[1]],self.drs_direct_points[0]))
-        if self.instant_path!=None and self.drs_direct_points!=None:
-            if self.dist(self.instant_path[0],[self.pose[0],self.pose[1]])<10:
-                #print("ulasildi",self.rotation_array[0])
-                self.instant_path.pop(0)
-            if self.dist(self.drs_direct_points[0],[self.pose[0],self.pose[1]])<5:
-                #print("drs bolgesine ulasildi")
-                self.drs_direct_points.pop(0)
-            if self.status=="scan":
-                print("slm")
-                if len(self.instant_path)==0:
-                    self.sorted_tasks_hash[self.uav_id].pop(0)
-                    self.scan_path=None
+            if self.dist(self.scan_path[0],[self.pose[0],self.pose[1]])>self.px*2 and self.rotation_array==None:
+
+                self.rotation_array=self.findRotationPath(self.bigger_denied_zones,[self.pose[0],self.pose[1]],self.scan_path[0],self.px)
+                self.rotationAltitude=self.params["telecom_height_max"]-0.5
+                self.altitude_control=self.rotationAltitude
+                self.instant_path=self.rotation_array
+                self.drs_direct_points=self.findDRS(self.instant_path)
+            if self.status!="paused":
+                self.move_to_path(self.instant_path[0])
+            print("scan icin kalan mesafe ",self.dist([self.pose[0],self.pose[1]],self.scan_path[0]))
+            print("hedef path ",self.dist([self.pose[0],self.pose[1]],self.instant_path[0]))
+            print("drs mesafesi ",self.dist([self.pose[0],self.pose[1]],self.drs_direct_points[0]))
+            if self.instant_path!=None and self.drs_direct_points!=None:
+
+                if self.dist(self.drs_direct_points[0],[self.pose[0],self.pose[1]])<10:
+                    #print("drs bolgesine ulasildi")
+                    if len(self.inj_list)>0:
+                        self.status="paused"
+                        #self.paused_drs_points=self.findDRS(self.paused_rotation_path)
+                    if len(self.inj_list)==0:
+                        #self.status=None
+                        self.drs_direct_points.pop(0)
+
+                if self.dist(self.instant_path[0],[self.pose[0],self.pose[1]])<10:
+                    #print("ulasildi",self.rotation_array[0])
+                    self.instant_path.pop(0)
+                if self.status!="paused":
+                    #print("slm")
+                    if len(self.instant_path)==0:
+                        self.sorted_tasks_hash[self.uav_id].pop(0)
+                        self.scan_path=None
+
+        if self.status=="paused":
+            if self.paused!="bekle":
+                if self.uav_msg["active_uav"]["injured_rescue_status"]["isCarrying"]==False:
+                    self.paused="yakala"
+                if self.uav_msg["active_uav"]["injured_rescue_status"]["isCarrying"]==True:
+                    self.paused="birak"
+            if self.paused_rotation_path==None and self.paused=="yakala":
+                self.paused_rotation_path=self.findRotationPath(self.bigger_denied_zones,[self.pose[0],self.pose[1]],self.inj_list[0],self.px)
+            if self.paused=="birak" and self.paused_rotation_path==None:
+                self.paused_rotation_path=self.findRotationPath(self.bigger_denied_zones,[self.pose[0],self.pose[1]],[125,-440],self.px)
+
+
+            self.paused_drs_points=self.findDRS(self.paused_rotation_path)
+            print(self.inj_list[0])
+            print("yarali icin kalan mesafe ",self.dist([self.pose[0],self.pose[1]],self.inj_list[0]))
+            print("hedef path ",self.dist([self.pose[0],self.pose[1]],self.paused_rotation_path[0]))
+            print("drs mesafesi ",self.dist([self.pose[0],self.pose[1]],self.paused_drs_points[0]))
+            print(self.paused)
+            self.move_to_path(self.paused_rotation_path[0])
+
+
+            #yarali alma
+            if self.dist([self.pose[0],self.pose[1]],self.inj_list[0])<5:
+                self.paused="bekle"
+                self.altitude_control=self.params["injured_pick_up_height"]-5
+                if self.uav_msg["active_uav"]["injured_rescue_status"]["isCarrying"]==True:
+                    self.altitude_control=self.rotationAltitude
+                    if self.rotationAltitude-5<self.uav_msg["active_uav"]["altitude"]:
+                        self.paused="birak"
+                        self.paused_rotation_path=None
+
+
+            #yarali birakma
+            if self.dist([self.pose[0],self.pose[1]],[125,-440])<5:
+                self.paused="bekle"
+                self.altitude_control=self.params["injured_release_height"]-5
+                if self.uav_msg["active_uav"]["injured_rescue_status"]["isCarrying"]==False:
+                    self.altitude_control=self.rotationAltitude
+                    if self.rotationAltitude-5<self.uav_msg["active_uav"]["altitude"]:
+                        self.paused=None
+                        self.status=None
+                        self.paused_rotation_path=None
+
+
+
+
+
+            if self.paused!="bekle":
+                if self.paused_drs_points!=None and self.paused_rotation_path!=None:
+
+                    if self.dist(self.paused_drs_points[0],[self.pose[0],self.pose[1]])<10:
+                        if self.paused=="yakala":
+                            if self.paused_drs_points[0]!=self.inj_list[0]:
+                                self.paused_drs_points.pop(0)
+                        if self.paused=="birak":
+                            if self.paused_drs_points[0]!=[125,-440]:
+                                self.paused_drs_points.pop(0)
+                        #if self.paused_drs_points[0]==self.inj_list[0] or self.paused_drs_points[0]==[-440,125]:
+                            #if self.dist(self.paused_drs_points[0],[self.pose[0],self.pose[1]])<3:
+                                #self.paused_drs_points.pop(0)
+
+                    if self.dist(self.paused_rotation_path[0],[self.pose[0],self.pose[1]])<10:
+                        if self.paused=="yakala":
+                            if self.paused_rotation_path[0]!=self.inj_list[0]:
+                                self.paused_rotation_path.pop(0)
+                        if self.paused=="birak":
+                            if self.paused_rotation_path[0]!=[125,-440]:
+                                self.paused_rotation_path.pop(0)
+                        #if self.paused_rotation_path[0]==self.inj_list[0] or self.paused_drs_points[0]==[-440,125]:
+                            #if self.dist(self.paused_rotation_path[0],[self.pose[0],self.pose[1]])<3:
+                                #self.paused_rotation_path.pop(0)
+
+    def waitingAltitude(self,altitude,waitingfor):
+        if self.paused=="bekle":
+            self.altitude_control=self.params["injured_pick_up_height"]-5
+            if self.paused==waitingfor:
+
+                if self.uav_msg["active_uav"]["injured_rescue_status"]["isCarrying"]==True:
+                    self.paused="birak"
+                    self.paused_rotation_path=None
+        if self.paused=="bekle":
+            self.altitude_control=self.params["injured_release_height"]-5
+            if self.uav_msg["active_uav"]["injured_rescue_status"]["isCarrying"]==False:
+                self.paused=None
+                self.paused_rotation_path=None
+
+
+
+    def findainjured(self):
+        inj=[]
+        for i in range(len(self.uav_msg["casualties_in_world"])):
+            if self.uav_msg["casualties_in_world"][i]["in_world"]==True and self.uav_msg["casualties_in_world"][i]['status']=='injured':
+                t=list(self.uav_msg["casualties_in_world"][i]['pose'])
+                inj.append(t)
+        return inj
+
+
+
     def move_to_path(self, target_position):
         #self.drs_direct_points
         #self.rotation_array
-        dist = util.dist([self.drs_direct_points[0][0],self.drs_direct_points[0][1]], self.pose)
+        if self.status!="paused":
+            dist = util.dist([self.drs_direct_points[0][0],self.drs_direct_points[0][1]], self.pose)
+        if self.status=="paused":
+            dist=util.dist([self.paused_drs_points[0][0],self.paused_drs_points[0][1]], self.pose)
         target_angle = math.atan2(target_position[0]-self.pose[0], -(target_position[1]-self.pose[1]))
         target_angle = math.degrees(target_angle)
 
@@ -199,7 +316,10 @@ class KagUAV(BaseUAV):
         head=math.radians(head)
         yy=math.sin(head)
         xx=math.cos(head)
-        dist = util.dist([self.drs_direct_points[0][0],self.drs_direct_points[0][1]], self.pose)
+        if self.status!="paused":
+            dist = util.dist([self.drs_direct_points[0][0],self.drs_direct_points[0][1]], self.pose)
+        if self.status=="paused":
+            dist=util.dist([self.paused_drs_points[0][0],self.paused_drs_points[0][1]], self.pose)
         #print(dist,"mesafe")
         #self.PID(0.5,0.0,35.0)
         self.PID(0.5,0.0,35.0)
@@ -474,8 +594,10 @@ class KagUAV(BaseUAV):
 
 
     def is_load_done(self, load_type):
+
     	if self.injury_timer == None:
     		self.injury_timer = self.uav_msg['sim_time']
+
         if load_type == 'load':
             if self.uav_msg['sim_time'] - self.injury_timer > (self.load_time * 1000):
                 self.injury_timer = None
@@ -569,29 +691,7 @@ class KagUAV(BaseUAV):
         self.u_b = self.uav_msg['uav_formation']['u_b']
         self.u_k = self.uav_msg['uav_formation']['u_k']
 
-    '''
-    def noise_filter(self,data):
-        loc_y=data["active_uav"]["location"][1]
-        loc_x=data["active_uav"]["location"][0]
-        if len(self.defterx)<=12:
-            self.defterx.append(loc_x)
-            self.deftery.append(loc_y)
-        if len(self.defterx)==12:
-            self.defterx.pop(0)
-            self.deftery.pop(0)
-        if data["uav_guide"]["gps_noise_flag"] == True:
 
-            inds = arange(0,11)
-            slope, intercept, r_value, p_value, std_err = stats.linregress(inds,self.defterx)
-            linex = slope*inds+intercept
-            tahminX=linex[5]
-            slope, intercept, r_value, p_value, std_err = stats.linregress(inds,self.deftery)
-            liney = slope*inds+intercept
-            tahminY=liney[5]
-            print("tahmin",tahminX,tahminY)
-            print("reel",loc_x,loc_y)
-            return [tahminX,tahminY]
-    '''
     def updateUAVLink(self):
         data = self.prepareUAVLink()
         for i in range(len(data)):
@@ -1017,10 +1117,9 @@ class KagUAV(BaseUAV):
             print(i)
 
     def dist(self,position1, position2):
-        sum = 0
-        for i in range(len(position1)):
-            diff = position1[i]-position2[i]
-            sum += diff * diff
+        diffx = position1[0]-position2[0]
+        diffy= position1[1]-position2[1]
+        sum =(diffx**2)+(diffy**2)
         return math.sqrt(sum)
 
 
@@ -1567,7 +1666,6 @@ class KagUAV(BaseUAV):
 
     def findDRS(self,path_array):
         drs_array=[]
-        drs_array.append(path_array[0])
         for i in range(len(path_array)-2):
             t_aci=math.atan2(path_array[i][0]-path_array[i+1][0],path_array[i][1]-path_array[i+1][1])
             t_aci=math.degrees(t_aci)
@@ -1576,7 +1674,7 @@ class KagUAV(BaseUAV):
             aci=t_aci-aci
             aci=math.sqrt(aci**2)
             if aci>10:
-                make_point=[path_array[i][0],path_array[i][1]]
+                make_point=[path_array[i+1][0],path_array[i+1][1]]
                 drs_array.append(make_point)
         drs_array.append(path_array[-1])
         return drs_array
@@ -1596,3 +1694,59 @@ class KagUAV(BaseUAV):
                 denied_zones[i][j][0]=denied_zones[i][j][0]+px_x
                 denied_zones[i][j][1]=denied_zones[i][j][1]+px_y
         return denied_zones
+
+    def injury_operation(self, injured_xy, hospital_xy):
+        if self.interrupt_loc == None:
+            self.interrupt_loc = [self.pose[0], self.pose[1], self.pose[2]]
+        if self.injury_operation_phase == 1:
+            self.injury_load_process(injured_xy, 'load')
+        elif self.injury_operation_phase == 2:
+            self.injury_load_process(hospital_xy, 'unload')
+        else:
+            self.injury_operation_phase = 0
+            print('hoooraaaaa! We saved mother russia!')
+            pass
+
+    def injury_load_process(self, target, load_type):
+        if self.injury_load_phase == 0:
+            d = util.dist(self.pose[:2], target[:2])
+            if not self.reached(d):
+                self.move_to_target((target[:2] + [90.0]))
+            else:
+                self.injury_load_phase += 1
+        elif self.injury_load_phase == 1:
+            print(self.alt_lock == self.pose[2], self.alt_lock, self.pose[2])
+            if self.pose[2] < (target[2] - 2.0):
+                if self.alt_lock == None:
+                    self.alt_lock = float((target[2] - 2.0))
+                elif self.is_load_done(load_type):
+                    self.injury_load_phase += 1
+                self.send_move_cmd(0.0, 0.0, self.pose[3], self.alt_lock)
+            else:
+                self.send_move_cmd(0.0, 0.0, self.pose[3], 2.5)
+        elif self.injury_load_phase == 2:
+            if self.pose[2] < 90.0:
+                self.send_move_cmd(0, 0, self.pose[3], 100.0)
+            else:
+                self.send_move_cmd(0, 0, self.pose[3], self.pose[2])
+                self.injury_load_phase = 0
+                self.injury_operation_phase += 1
+
+
+    def is_load_done(self, load_type):
+    	if self.injury_timer == None:
+    		self.injury_timer = self.uav_msg['sim_time']
+        if load_type == 'load':
+            if self.uav_msg['sim_time'] - self.injury_timer > (self.load_time * 1000):
+                self.injury_timer = None
+                return True
+            else:
+            	print((self.uav_msg['sim_time'] - self.injury_timer), self.alt_lock, self.pose[2], self.alt_lock == self.pose[2])
+                return False
+        else:
+            if self.uav_msg['sim_time'] - self.injury_timer > (self.load_time * 1000):
+                self.injury_timer = None
+                return True
+            else:
+            	print((self.uav_msg['sim_time'] - self.injury_timer), self.alt_lock, self.pose[2], self.alt_lock == self.pose[2])
+                return False
