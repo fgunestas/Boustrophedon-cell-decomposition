@@ -161,9 +161,9 @@ class KagUAV(BaseUAV):
 
                 if self.scan_path==None:
                     print("scan path olusturuldu")
-                    scan_id=self.sorted_tasks_hash[self.uav_id][0][0]#deneme
+                    self.scan_id=self.sorted_tasks_hash[self.uav_id][0][0]#deneme
 
-                    self.scan_path=self.path_for_subareas[scan_id]
+                    self.scan_path=self.path_for_subareas[self.scan_id]
 
 
                 #rotasyona gerek yoksa.
@@ -322,6 +322,17 @@ class KagUAV(BaseUAV):
             if self.uav_msg["casualties_in_world"][i]["in_world"]==True and self.uav_msg["casualties_in_world"][i]['status']=='injured':
                 t=list(self.uav_msg["casualties_in_world"][i]['pose'])
                 inj.append(t)
+        i=0
+        for i in range(len(self.sorted_subareas)):
+            if self.scan_id == str(hash(str (self.sorted_subareas[i]))):
+                self.instantPathArea=self.sorted_subareas[i]
+                
+        temp=[]
+        for i in range(len(inj)):
+            pack=self.point_control([self.instantPathArea],inj[i])
+            if pack[0]==True:
+                temp.append(inj[i])
+        inj=temp
         i=0
         j=0
         inj_=[]
