@@ -326,7 +326,7 @@ class KagUAV(BaseUAV):
         for i in range(len(self.sorted_subareas)):
             if self.scan_id == str(hash(str (self.sorted_subareas[i]))):
                 self.instantPathArea=self.sorted_subareas[i]
-                
+
         temp=[]
         for i in range(len(inj)):
             pack=self.point_control([self.instantPathArea],inj[i])
@@ -360,11 +360,7 @@ class KagUAV(BaseUAV):
             hmm=[inj_[i],yakin_h_loc]
             sorted_inj_loc.append(hmm)
         inj=sorted_inj_loc
-        inj_deneme=[]
-        for k in range(len(inj)):
-            if inj[k][0]==[155.65,198.291]:
-                inj_deneme.append([[155.65,198.291],[-410.0,450.0]])
-        return inj_deneme
+        return inj
 
 
     def move_to_path(self, target_position):
