@@ -12,11 +12,18 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 from scipy.spatial import ConvexHull
+#from threading import Thread
 #import matplotlib as mpl
+"""
+def slm():
+    #print("slm")
 
-
-with open('wtf.json') as f:
+s=Thread(target=slm)
+s.start()
+"""
+with open('sim0.json') as f:
     data = json.load(f)
+
 
 def point_control(zones,point):
     i=0
@@ -38,32 +45,30 @@ def point_control(zones,point):
 def slice_control(dilim,bas,sinir,ustsinir,zones,data,px):
     pack=[]
     start=1
-
+    #print(dilim,bas,sinir,ustsinir)
     for i in range(int(bas),sinir,-px):
+        #print(dilim,bas)
         make_point=[dilim,i]
         inside=point_control(zones,make_point)
-
         if (start==1) and (inside[0][0]==False):
             upper=make_point
             start=0
-
         if start==0:
-
             if (inside[0][0]==True) or (i-px<=sinir):
                 if inside[0][0]==True:
                     ustsinir=inside[1]
                 lower=make_point
                 if inside[0][0]==True:
                     pack=[upper,lower,inside[1],ustsinir]
-
                     return pack
                 if inside[0][0]==False:
                     pack=[upper,lower,0,ustsinir]
-
                     return pack
+
     return pack
 
 def unpack (zone,dilim,data,px):
+    #print("unpack")
     top=data["world_boundaries"]
     top=max(top)
     zone_stop=-9999999999
@@ -72,28 +77,33 @@ def unpack (zone,dilim,data,px):
             zone_stop=zone[i][0]
     top=top[1]
     while True:
+        #print("unpack while")
         make_point=[dilim,top]
         top=top-px
         pack=point_control([zone],make_point)
-
+        wtfpack=point_control([data["world_boundaries"]],make_point)
+        if wtfpack[0][0]==False:
+            start=[make_point,zone,zone_stop]
+            break
         if pack[0][0]==True:
             start=[make_point,zone,zone_stop]
             break
     return start
 
 def BCD(zones,area,data,px):
-    start=area[3]
+    area=np.array(area)
+    sol=min(area[:,0])
+    top=max(area[:,1])
+    start=[sol,top]
     dilim=start[0]
     bas=start[1]
-    sinir=min(area)
-    sinir=sinir[1]
+    sinir=min(area[:,1])
     altsinir=[]
     upper=[]
     lower=[]
-    solsinir=max(area)
-    solsinir=solsinir[0]
-    ustsinir=max(area)
-    ustsinir=ustsinir[0]
+    #solsinir=sol
+    ustsinir=max(area[:,1])
+    sagsinir=max(area[:,0])
     cells=[]
     cell=[]
     stack_point=[]
@@ -101,80 +111,74 @@ def BCD(zones,area,data,px):
     stack_stop=[]
     start=1
     denied_start=0
+    bringworst=0
     while True:
-        paket=slice_control(dilim,bas,sinir,ustsinir,zones,data,px)
-
-        if start==1:
-
-            altsinir=paket[2]
-            ustsinir=paket[3]
-            upper.append(paket[0])
-            lower.append(paket[1])
-            start=0
-            dilim=dilim+px
-        if start==0 and altsinir==paket[2] and ustsinir==paket[3]:
-
-            upper.append(paket[0])
-            lower.append(paket[1])
-            dilim=dilim+px
-
-
-        if start==0:
-
-            if (altsinir!=paket[2]) or (ustsinir!=paket[3]):
-                if (altsinir!=paket[2]) and (ustsinir!=0):
-                    denied_start=dilim
-                temp=[]
-                temp=lower[::-1]
-
-
-                cell=temp+upper
-                cells.append(cell)
-                cell=[]
-                lower=[]
-                upper=[]
+        try:
+            #print(len(cells))
+            #print(dilim,bas,sinir,ustsinir)
+            paket=slice_control(dilim,bas,sinir,ustsinir,zones,data,px)
+            #print(paket[3],paket[2])
+            if start==1:
                 altsinir=paket[2]
                 ustsinir=paket[3]
+                upper.append(paket[0])
+                lower.append(paket[1])
+                start=0
+                dilim=dilim+px
+            #print(paket[2])
+            #print(paket[3])
+            if start==0 and altsinir==paket[2] and ustsinir==paket[3]:
+                upper.append(paket[0])
+                lower.append(paket[1])
+                dilim=dilim+px
+            if start==0:
+                if (altsinir!=paket[2]) or (ustsinir!=paket[3]):
+                    if (altsinir!=paket[2]) and (ustsinir!=0):
+                        denied_start=dilim
+                    temp=[]
+                    temp=lower[::-1]
+                    cell=temp+upper
+                    cells.append(cell)
+                    cell=[]
+                    lower=[]
+                    upper=[]
+                    altsinir=paket[2]
+                    ustsinir=paket[3]
+                if paket[2]!=0:
+                    new_start=unpack(paket[2],denied_start,data,px)
+                    if new_start[0] not in stack_point:
+                        stack_area.append(new_start[1])
+                        stack_point.append(new_start[0])
+                        stack_stop.append(new_start[2])
+                if dilim>sagsinir and len(stack_point)!=0:
+                    temp=[]
+                    temp=lower[::-1]
+                    cell=temp+upper
+                    cells.append(cell)
+                    cell=[]
+                    lower=[]
+                    upper=[]
+                    altsinir=paket[2]
+                    ustsinir=paket[3]
+                    pop=stack_point.pop()
+                    stack_area.pop()
+                    zone_stop=stack_stop.pop()
+                    dilim=pop[0]
+                    bas=pop[1]
+                    sagsinir=int(zone_stop)
+                if dilim>sagsinir and len(stack_point)==0:
+                    temp=[]
+                    temp=lower[::-1]
+                    cell=temp+upper
+                    cells.append(cell)
+                    #print("slm")
+                    break
+        except:
+            #print("except cells",len(cells))
+            dilim=dilim+px
+            if len(cells)>100:
+                bringworst=1
 
-
-            if paket[2]!=0:
-
-                new_start=unpack(paket[2],denied_start,data,px)
-                if new_start[0] not in stack_point:
-                    stack_area.append(new_start[1])
-                    stack_point.append(new_start[0])
-                    stack_stop.append(new_start[2])
-
-
-            if dilim>solsinir and len(stack_point)!=0:
-                temp=[]
-                temp=lower[::-1]
-
-
-                cell=temp+upper
-                cells.append(cell)
-                cell=[]
-                lower=[]
-                upper=[]
-                altsinir=paket[2]
-                ustsinir=paket[3]
-
-                pop=stack_point.pop()
-                stack_area.pop()
-                zone_stop=stack_stop.pop()
-                dilim=pop[0]
-                bas=pop[1]
-                solsinir=int(zone_stop)
-
-
-            if dilim>solsinir and len(stack_point)==0:
-                temp=[]
-                temp=lower[::-1]
-
-                cell=temp+upper
-                cells.append(cell)
-
-                break
     return cells
 tall_index = 0
 while(data['special_assets'][tall_index]['type'] != 'tall_building'):
@@ -186,7 +190,7 @@ tall_count = len(data['special_assets'][tall_index]['locations'])
 #    bridge_length = data['special_assets'][tall_index]['width'][0] * 100
 #else:
 #    bridge_length = data['special_assets'][tall_index]['width'][1] * 2.5
-bridge_length = 100.0
+bridge_length =200
 cluster_count = 0
 cluster_element_treshold = 3
 
@@ -391,12 +395,17 @@ def sortSubareas(subareas,maxQ):
     temp=0
     for j in range(len(hashkeys)):
         for i in range(len(hashkeys)):
+            try:
 
-            low=-sub_dist[hashkeys[i]]
-            if temp>low:
-                temp=low
-                hashkey=hashkeys[i]
-                index=i
+                low=-sub_dist[hashkeys[i]]
+                if temp>low:
+                    temp=low
+                    hashkey=hashkeys[i]
+                    index=i
+            except Exception as e:
+                print(e)
+                continue
+
 
         if hashkey not in hashlist:
             hashlist.append(hashkey)
@@ -604,7 +613,18 @@ def findDRS(path_array):
         drs_array.append(path_array[-1])
         return drs_array
 
-           
+def bounderisbig(world_boundaries,width):
+    point=world_boundaries
+    point=np.array(point)
+    x = point[:,0]
+    y = point[:,1]
+    temp_center = [sum(x) / len(point), sum(y) / len(point)]
+   # for i in range(len(world_boundaries)):
+    #    =dist(world_boundaries[i],temp_center)
+    return temp_center
+
+center=bounderisbig(data["world_boundaries"],200)
+    
     
 
 
@@ -625,7 +645,8 @@ for i in range(cluster_count+1):
 for i in special_assets:
     clusters[i["c"]].append(i["p"])
 
-mask_for_cluster=unpacked_cluster(clusters,75)
+
+mask_for_cluster=unpacked_cluster(clusters,150)
 merge_tall=[]
 temp_mask_for_cluster=[]
 for j in range(len(mask_for_cluster)):
@@ -648,12 +669,13 @@ for i in range(1,len(temp_mask_for_cluster)):
 tall_locs_=[]
 for t in range(len(data["special_assets"])):
     if data["special_assets"][t]["type"]=="tall_building":
-        tall_width=data["special_assets"][t]["width"]
+        tall_width=max(data["special_assets"][t]["width"])+35
         tall_locs=data["special_assets"][t]["locations"]
         for i in range(len(tall_locs)):
-            tmp=[tall_locs[i][0]-(tall_width[0]/2),tall_locs[i][1]+(tall_width[0]/2)]
-            tmps=[[tmp[0],tmp[1]],[tmp[0]+tall_width[0],tmp[1]],[tmp[0]+tall_width[0],tmp[1]-tall_width[0]],[tmp[0],tmp[1]-tall_width[0]]]
+            tmp=[tall_locs[i][0]-(tall_width/2),tall_locs[i][1]+(tall_width/2)]
+            tmps=[[tmp[0],tmp[1]],[tmp[0]+tall_width,tmp[1]],[tmp[0]+tall_width,tmp[1]-tall_width],[tmp[0],tmp[1]-tall_width]]
             tall_locs_.append(tmps)
+            
 h_locs=[]
 i=0
 for i in range(len(data["special_assets"])):
@@ -673,7 +695,8 @@ all_denied=tall_locs_+h_locs+data["denied_zones"]
 denied_for_bcd=[]
 denied_for_bcd=data["denied_zones"]+mask_for_cluster[0]+maxQ_Areas
 area=data["world_boundaries"]
-subareas=BCD(denied_for_bcd,area,data,5)
+subareas=BCD(denied_for_bcd,area,data,20)
+#print(subareas)
 i=0
 temp=[]
 subarea_dict={}
@@ -849,13 +872,13 @@ def cam_sensor_width(data):
         aci=data["logical_camera_horizontal_fov"]/2
         scan_height=data["logical_camera_height_max"]-0.5
         baci=180-(aci+90)
-        print(baci)
+        #print(baci)
         baci_r=math.radians(baci)
         baci_sin=math.sin(baci_r)
-        print(baci_sin)
+        #print(baci_sin)
         baci_cos=math.cos(baci_r)
         hipo=scan_height/baci_sin
-        print(hipo)
+        #print(hipo)
         #print(hipo)
         width=hipo*baci_cos*2#feet
         #print(width)
@@ -871,20 +894,26 @@ for i in range(data["uav_count"]):
 i=0
 for i in range(len(path_keys)):
     j=i%data["uav_count"]
-    print(j)
+    #print(j)
     hashno=str(path_keys[i])
     tasks_hash[j].append([hashno])
+
+#for i in range(len(path_keys)):
+#    for j in range(len(subareas)):
+#        hm=str(hash(str(subareas[j])))
+#        if str(path_keys[i])==hm:
+#            #print("bum")
     
     
+aray=[-6500.0,300.0],[-6550.0,350.0],[-6600.0,400.0],[-6650.0,450.0],[-6700.0,500.0],[-6750.0,550.0],[-6800.0,450.0],[-6850.0,500],[-6900.0,550.0],[-6950.0,600.0],[-9800.0,900.0],[-9800.0,840.0],[-9700.0,870.0],[-9760.0,860.0],[-6700.0,1600.0],[-6800.0,1600],[-6900.0,1600.0],[-7000.0,1600.0],[-8000.0,870.0],[-8050.0,860.0],[-8050.0,850.0],[-8190.0,400],[-8190.0,480.0],[-7000.0,300.0],[-7000.0,350.0],[-7050.0,400.0],[-7200.0,400.0],[-7200.0,300],[-7300.0,350]
 
-    
+aray=np.array(aray)
+plt.plot(aray[:,0], aray[:,1], 'ro')
+#hashno=hash(str(subareas[2]))
+#slow_path=path_for_subareas[str(hashno)]
+#t_aci=None
 
 
-hashno=hash(str(subareas[2]))
-slow_path=path_for_subareas[str(hashno)]
-t_aci=None
-
-        
 """       
 hashno=hash(str(subareas[2]))
 rot_pat=path_for_subareas[str(hashno)]
@@ -919,19 +948,21 @@ for i in range(len(test_rotation)-2):
 #plt.plot(rotationplot[:,0], rotationplot[:,1], 'r-')
 # 
 # ===============================test==============================================
-
+          
 sorted_keys=[]
 for i in range(len(sorted_subareas)):
     x=str(hash(str(sorted_subareas[i])))
     sorted_keys.append(x)
 
 
-x=path_keys[12]
-path=path_for_subareas[str(x)]
-t_drs=findDRS(path)
-t_drs=np.array(t_drs)
-plt.plot(t_drs[:,0], t_drs[:,1], 'g.')
-    
+#x=path_keys[12]
+"""
+for i in range(len(path_keys)):
+    path=path_for_subareas[str(path_keys[i])]
+    t_drs=findDRS(path)
+    t_drs=np.array(t_drs)
+    plt.plot(t_drs[:,0], t_drs[:,1], 'r.')
+"""   
 
 
 ax.autoscale_view()
