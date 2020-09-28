@@ -4,19 +4,14 @@ Created on Tue Sep  8 17:27:29 2020
 
 @author: 1700003918
 """
-import json
 import matplotlib.path as mpltPath
 import math
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, Circle
 from matplotlib.collections import PatchCollection
-#from threading import Thread
 #import matplotlib as mpl
 
-
-with open('sim0.json') as f:
-    data = json.load(f)
 
 
 def point_control(zones,point):
@@ -35,7 +30,7 @@ def point_control(zones,point):
             pack=[inside,0]
     return pack
 
-def slice_control(dilim,bas,sinir,ustsinir,zones,data,px):
+def slice_control(dilim,bas,sinir,ustsinir,zones,px):
     pack=[]
     start=1
     #print(dilim,bas,sinir,ustsinir)
@@ -59,21 +54,20 @@ def slice_control(dilim,bas,sinir,ustsinir,zones,data,px):
                     return pack
     return pack
 
-def unpack (zone,dilim,data,px):
-    #print("unpack")
-    top=data["world_boundaries"]
-    top=max(top)
+def unpack (zone,dilim,area,px):
+    top=area
+    top=np.array(top)
+    top=max(top[:,1])
+
     zone_stop=-9999999999
     for i in range(len(zone)):
         if zone[i][0]>zone_stop:
             zone_stop=zone[i][0]
-    top=top[1]
     while True:
-        #print("unpack while")
         make_point=[dilim,top]
         top=top-px
         pack=point_control([zone],make_point)
-        wtfpack=point_control([data["world_boundaries"]],make_point)
+        wtfpack=point_control([area],make_point)
         if wtfpack[0][0]==False:
             start=[make_point,zone,zone_stop]
             break
@@ -82,7 +76,7 @@ def unpack (zone,dilim,data,px):
             break
     return start
 
-def BCD(zones,area,data,px):
+def BCD(zones,area,px):
     area=np.array(area)
     sol=min(area[:,0])
     top=max(area[:,1])
@@ -104,69 +98,66 @@ def BCD(zones,area,data,px):
     start=1
     denied_start=0
     while True:
-        try:
-            #print(len(cells))
-            #print(dilim,bas,sinir,ustsinir)
-            paket=slice_control(dilim,bas,sinir,ustsinir,zones,data,px)
-            #print(paket[3],paket[2])
-            if start==1:
+
+        #print(len(cells))
+        #print(dilim,bas,sinir,ustsinir)
+        paket=slice_control(dilim,bas,sinir,ustsinir,zones,px)
+        #print(paket[3],paket[2])
+        if start==1:
+            altsinir=paket[2]
+            ustsinir=paket[3]
+            upper.append(paket[0])
+            lower.append(paket[1])
+            start=0
+            dilim=dilim+px
+        #print(paket[2])
+        #print(paket[3])
+        if start==0 and altsinir==paket[2] and ustsinir==paket[3]:
+            upper.append(paket[0])
+            lower.append(paket[1])
+            dilim=dilim+px
+        if start==0:
+            if (altsinir!=paket[2]) or (ustsinir!=paket[3]):
+                if (altsinir!=paket[2]) and (ustsinir!=0):
+                    denied_start=dilim
+                temp=[]
+                temp=lower[::-1]
+                cell=temp+upper
+                cells.append(cell)
+                cell=[]
+                lower=[]
+                upper=[]
                 altsinir=paket[2]
                 ustsinir=paket[3]
-                upper.append(paket[0])
-                lower.append(paket[1])
-                start=0
-                dilim=dilim+px
-            #print(paket[2])
-            #print(paket[3])
-            if start==0 and altsinir==paket[2] and ustsinir==paket[3]:
-                upper.append(paket[0])
-                lower.append(paket[1])
-                dilim=dilim+px
-            if start==0:
-                if (altsinir!=paket[2]) or (ustsinir!=paket[3]):
-                    if (altsinir!=paket[2]) and (ustsinir!=0):
-                        denied_start=dilim
-                    temp=[]
-                    temp=lower[::-1]
-                    cell=temp+upper
-                    cells.append(cell)
-                    cell=[]
-                    lower=[]
-                    upper=[]
-                    altsinir=paket[2]
-                    ustsinir=paket[3]
-                if paket[2]!=0:
-                    new_start=unpack(paket[2],denied_start,data,px)
-                    if new_start[0] not in stack_point:
-                        stack_area.append(new_start[1])
-                        stack_point.append(new_start[0])
-                        stack_stop.append(new_start[2])
-                if dilim>sagsinir and len(stack_point)!=0:
-                    temp=[]
-                    temp=lower[::-1]
-                    cell=temp+upper
-                    cells.append(cell)
-                    cell=[]
-                    lower=[]
-                    upper=[]
-                    altsinir=paket[2]
-                    ustsinir=paket[3]
-                    pop=stack_point.pop()
-                    stack_area.pop()
-                    zone_stop=stack_stop.pop()
-                    dilim=pop[0]
-                    bas=pop[1]
-                    sagsinir=int(zone_stop)
-                if dilim>sagsinir and len(stack_point)==0:
-                    temp=[]
-                    temp=lower[::-1]
-                    cell=temp+upper
-                    cells.append(cell)
-                    #print("slm")
-                    break
-        except:
-            #print("except cells",len(cells))
-            dilim=dilim+px            
+            if paket[2]!=0:
+                new_start=unpack(paket[2],denied_start,area,px)
+                if new_start[0] not in stack_point:
+                    stack_area.append(new_start[1])
+                    stack_point.append(new_start[0])
+                    stack_stop.append(new_start[2])
+            if dilim>sagsinir and len(stack_point)!=0:
+                temp=[]
+                temp=lower[::-1]
+                cell=temp+upper
+                cells.append(cell)
+                cell=[]
+                lower=[]
+                upper=[]
+                altsinir=paket[2]
+                ustsinir=paket[3]
+                pop=stack_point.pop()
+                stack_area.pop()
+                zone_stop=stack_stop.pop()
+                dilim=pop[0]
+                bas=pop[1]
+                sagsinir=int(zone_stop)
+            if dilim>sagsinir and len(stack_point)==0:
+                temp=[]
+                temp=lower[::-1]
+                cell=temp+upper
+                cells.append(cell)
+                #print("slm")
+                break
     return cells
 def dist(position1, position2):
     sum = 0
@@ -180,19 +171,63 @@ def dist(position1, position2):
 
 #görüntü bölgesi
 
-#girilmesi yasak bölgeler
+
 fig, ax = plt.subplots()
-patches=[]
-for i in range(len(all_denied)):
-    polygon = Polygon(all_denied[i], True)
-    patches.append(polygon)
 
-k = PatchCollection(patches)
-ax.add_collection(k)
+area=[[1000,1000],[-1000,1000],[-1000,-1000],[1000,-1000]]
 
 
-#plt.plot(bitir[0], bitir[1], 'go')
-#plt.plot(basla[0], basla[1], 'bo')
+obstacles=[]
+obstacles_forplot = []
+
+circle = Circle((750, 50), 100)
+obstacles_forplot.append(circle)
+verts=circle.get_path().vertices
+trans = circle.get_patch_transform()
+circle_corners = list(trans.transform(verts))
+obstacles.append(circle_corners)
+
+
+triangle_corners=[[-600,750],[-250,250],[-800,208]]
+obstacles.append(triangle_corners)
+
+triangle = Polygon(np.array(triangle_corners), True)
+obstacles_forplot.append(triangle)
+
+square_corners=[[-100,250],[400,250],[400,-250],[-100,-250]]
+obstacles.append(square_corners)
+
+square = Polygon(np.array(square_corners), True)
+obstacles_forplot.append(square)
+
+
+p = PatchCollection(obstacles_forplot, alpha=0.4,facecolors="black")
+ax.add_collection(p)
+
+
+
+cells=BCD(obstacles,area,10)
+
+cellplot=[]
+for i in range(len(cells)):
+    cell=Polygon(np.array(cells[i]),True)
+    cellplot.append(cell)
+
+
+
+colors = 100*np.random.rand(len(cellplot))
+c = PatchCollection(cellplot, alpha=0.4)
+c.set_array(np.array(colors))
+ax.add_collection(c)
+fig.colorbar(c, ax=ax)
+
+
+
+
+
+
+ax.autoscale_view()
+plt.show()
 
 
 """
@@ -212,7 +247,7 @@ fig.colorbar(k, ax=ax)
 
 
 
-
+"""
 
 patches=[]
 for i in range(len(sorted_subareas)):
@@ -276,3 +311,4 @@ for i in range(len(sorted_subareas)):
 
 ax.autoscale_view()
 plt.show()
+"""
